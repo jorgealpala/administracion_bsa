@@ -129,7 +129,7 @@ footer{border-top:2px solid var(--linea);margin-top:26px;padding:16px 0 calc(28p
     <label class="campo"><span>Usuario</span>
       <input id="u" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"></label>
     <label class="campo"><span>Contraseña</span>
-      <input id="p" type="password" autocomplete="current-password" inputmode="numeric"></label>
+      <input id="p" type="password" autocomplete="current-password"></label>
     <button class="principal" id="entrar" type="button">Ingresar</button>
     <p class="error" id="err" role="alert"></p>
   </div>
@@ -180,14 +180,37 @@ footer{border-top:2px solid var(--linea);margin-top:26px;padding:16px 0 calc(28p
         <button id="salir" type="button">Cerrar sesión</button>
       </div>
       <input id="archivo" type="file" accept="application/json,.json" hidden>
-      <p class="nota" id="aviso">Los registros se guardan en este dispositivo. Descargue un respaldo de vez en cuando.</p>
+      <p class="nota" id="aviso">Conectando…</p>
     </footer>
   </div>
 </div>
 
-<script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getDatabase, ref, onValue, set, update } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+/* ====================================================================
+   CONFIGURACIÓN DE FIREBASE: reemplace este bloque por el que entrega
+   la consola de Firebase (Configuración del proyecto > Tus apps > Web).
+   ==================================================================== */
+const firebaseConfig = {
+  apiKey: "AIzaSyDExbUuA1-zNC7ZyzG62Sq51sFdjHFxyHY",
+  authDomain: "administracion-bsa.firebaseapp.com",
+  databaseURL: "https://administracion-bsa-default-rtdb.firebaseio.com",
+  projectId: "administracion-bsa",
+  storageBucket: "administracion-bsa.firebasestorage.app",
+  messagingSenderId: "890774421886",
+  appId: "1:890774421886:web:fbe43080ed344ae6cdb32f"
+};
+/* El usuario "padresbriana" se convierte internamente en este correo. */
+const DOMINIO_USUARIO = "@example.com";
+
 (function(){
 "use strict";
+var configurado = firebaseConfig.apiKey.indexOf("PEGAR")!==0;
+var auth = null, db = null;
+if(configurado){ var fb = initializeApp(firebaseConfig); auth = getAuth(fb); db = getDatabase(fb); }
 
 /* ---------- Configuración de la fórmula (06 nov 2026) ---------- */
 var INICIO = "2026-11-09";
@@ -199,8 +222,7 @@ var MEDS = [
 ];
 var FIN_TOTAL = "2027-05-08";
 var AC_TOTAL = 12; /* Acerumen: 2 aplicaciones al día, 3 días por semana, 2 semanas */
-var HUELLA = "110b7bde3fe62b01ca1d8663336be7bc74a8d8350d5656278aed1866e79e43ec";
-var K_DATOS = "briana-meds-v1", K_SESION = "briana-meds-sesion";
+var K_DATOS = "briana-meds-v1";
 
 /* ---------- Utilidades ---------- */
 var DIAS = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
@@ -222,26 +244,20 @@ function borrar(k){ try{ localStorage.removeItem(k); }catch(e){ delete memoria[k
 
 /* ---------- Estado ---------- */
 var datos = {};
-try{ datos = JSON.parse(leer(K_DATOS)||"{}") || {}; }catch(e){ datos = {}; }
 var sel = hoy();
 if(sel < INICIO) sel = INICIO;
 if(sel > FIN_TOTAL) sel = FIN_TOTAL;
 var mesVista = sel.slice(0,7);
 
-function guardar(){
-  var ok = escribir(K_DATOS, JSON.stringify(datos));
-  if(!ok) $("aviso").textContent = "Este navegador no permite guardar datos; los registros se perderán al cerrar la página.";
-}
+function falla(){ $("aviso").textContent = "No se pudo guardar el cambio. Revise la conexión e intente de nuevo."; }
 function activos(k){ return MEDS.filter(function(m){ return k>=INICIO && k<=m.fin; }); }
 function dado(k,id){ return datos[k] && datos[k][id]; }
 function cuenta(k){ var a=activos(k), n=0; a.forEach(function(m){ if(dado(k,m.id)) n++; }); return {dadas:n,total:a.length}; }
 function acerumen(){ var n=0; Object.keys(datos).forEach(function(k){ if(datos[k].AC_AM) n++; if(datos[k].AC_PM) n++; }); return n; }
 function alternar(k,id){
   if(k>hoy()) return;
-  datos[k] = datos[k] || {};
-  if(datos[k][id]) delete datos[k][id]; else datos[k][id] = new Date().toISOString();
-  if(!Object.keys(datos[k]).length) delete datos[k];
-  guardar(); pintar();
+  var v = dado(k,id) ? null : new Date().toISOString();
+  set(ref(db, "registros/"+k+"/"+id), v).catch(falla);
 }
 
 /* ---------- Pintado ---------- */
@@ -360,39 +376,68 @@ $("archivo").onchange = function(){
         var o = {}; Object.keys(nuevos[k]).forEach(function(id){ if(/^(SP|UP|DK|SU|AC_AM|AC_PM)$/.test(id) && nuevos[k][id]) o[id] = String(nuevos[k][id]); });
         if(Object.keys(o).length) limpio[k] = o;
       });
-      if(confirm("Se reemplazarán los registros de este dispositivo por los del respaldo. ¿Continuar?")){ datos = limpio; guardar(); pintar(); }
+      if(confirm("Se reemplazarán los registros compartidos por los del respaldo, en todos los dispositivos. ¿Continuar?")){ set(ref(db,"registros"), limpio).catch(falla); }
     }catch(e){ alert("El archivo no es un respaldo válido de esta aplicación."); }
     campo.value = "";
   };
   r.readAsText(f);
 };
-$("salir").onclick = function(){ borrar(K_SESION); mostrar(false); };
+$("salir").onclick = function(){ signOut(auth); };
 
-/* ---------- Ingreso ---------- */
-function sha256(texto){
-  return crypto.subtle.digest("SHA-256", new TextEncoder().encode(texto)).then(function(buf){
-    return Array.prototype.map.call(new Uint8Array(buf), function(b){ return (b<16?"0":"")+b.toString(16); }).join("");
-  });
-}
+/* ---------- Ingreso y sincronización ---------- */
 function mostrar(dentro){
   $("ingreso").hidden = dentro; $("app").hidden = !dentro;
   if(dentro){ sel = hoy(); if(sel<INICIO) sel=INICIO; if(sel>FIN_TOTAL) sel=FIN_TOTAL; mesVista = sel.slice(0,7); pintar(); }
-  else { $("p").value = ""; $("err").textContent = ""; }
+  else { $("p").value = ""; }
 }
 function entrar(){
   var u = $("u").value.trim().toLowerCase(), p = $("p").value;
+  if(!configurado){ $("err").textContent = "Falta pegar la configuración de Firebase en index.html."; return; }
   if(!u || !p){ $("err").textContent = "Escriba el usuario y la contraseña."; return; }
-  if(!window.crypto || !crypto.subtle){ $("err").textContent = "Abra la página con https para poder ingresar."; return; }
-  sha256("briana-meds:"+u+"|"+p).then(function(h){
-    if(h===HUELLA){ escribir(K_SESION, HUELLA); mostrar(true); }
-    else $("err").textContent = "Usuario o contraseña incorrectos.";
-  });
+  $("err").textContent = ""; $("entrar").disabled = true;
+  signInWithEmailAndPassword(auth, u.indexOf("@")>0 ? u : u+DOMINIO_USUARIO, p).catch(function(e){
+    var c = (e && e.code) || "";
+    $("err").textContent = c==="auth/network-request-failed" ? "Sin conexión a internet." :
+      c==="auth/too-many-requests" ? "Demasiados intentos. Espere unos minutos." :
+      /invalid|wrong-password|user-not-found/.test(c) ? "Usuario o contraseña incorrectos." : "No se pudo ingresar ("+c+").";
+  }).then(function(){ $("entrar").disabled = false; });
 }
 $("entrar").onclick = entrar;
 $("p").addEventListener("keydown", function(e){ if(e.key==="Enter") entrar(); });
 $("u").addEventListener("keydown", function(e){ if(e.key==="Enter") $("p").focus(); });
 
-mostrar(leer(K_SESION)===HUELLA);
+/* Sube una sola vez lo que se haya registrado en este dispositivo con la versión anterior. */
+var migrado = false;
+function migrar(){
+  if(migrado) return; migrado = true;
+  var local; try{ local = JSON.parse(leer(K_DATOS)||"null"); }catch(e){ local = null; }
+  if(!local || typeof local!=="object") return;
+  var cambios = {}, n = 0;
+  Object.keys(local).forEach(function(k){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(k) || !local[k]) return;
+    Object.keys(local[k]).forEach(function(id){
+      if(/^(SP|UP|DK|SU|AC_AM|AC_PM)$/.test(id) && local[k][id] && !dado(k,id)){ cambios[k+"/"+id] = String(local[k][id]); n++; }
+    });
+  });
+  if(!n){ borrar(K_DATOS); return; }
+  update(ref(db,"registros"), cambios).then(function(){ borrar(K_DATOS); }).catch(function(){ migrado = false; });
+}
+
+var soltar = [];
+if(!configurado){
+  mostrar(false); $("err").textContent = "Falta pegar la configuración de Firebase en index.html.";
+}else{
+  onAuthStateChanged(auth, function(usuario){
+    soltar.forEach(function(f){ f(); }); soltar = [];
+    if(!usuario){ datos = {}; mostrar(false); return; }
+    $("err").textContent = ""; mostrar(true);
+    soltar.push(onValue(ref(db,"registros"), function(s){ datos = s.val() || {}; migrar(); pintar(); },
+      function(){ $("aviso").textContent = "Esta cuenta no tiene permiso para ver los registros. Revise las reglas de la base de datos."; }));
+    soltar.push(onValue(ref(db,".info/connected"), function(s){
+      $("aviso").textContent = s.val() ? "Sincronizado. Los registros se comparten entre todos los dispositivos." : "Sin conexión. Los cambios se enviarán al reconectar.";
+    }));
+  });
+}
 document.addEventListener("visibilitychange", function(){ if(!document.hidden && !$("app").hidden) pintar(); });
 })();
 </script>
