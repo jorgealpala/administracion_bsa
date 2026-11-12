@@ -249,7 +249,7 @@ if(sel < INICIO) sel = INICIO;
 if(sel > FIN_TOTAL) sel = FIN_TOTAL;
 var mesVista = sel.slice(0,7);
 
-function falla(){ $("aviso").textContent = "No se pudo guardar el cambio. Revise la conexión e intente de nuevo."; }
+function falla(e){ alert("No se pudo guardar el cambio en la base compartida"+(e&&e.code?" ("+e.code+")":"")+". Revise la conexión o las reglas de Firebase."); }
 function activos(k){ return MEDS.filter(function(m){ return k>=INICIO && k<=m.fin; }); }
 function dado(k,id){ return datos[k] && datos[k][id]; }
 function cuenta(k){ var a=activos(k), n=0; a.forEach(function(m){ if(dado(k,m.id)) n++; }); return {dadas:n,total:a.length}; }
@@ -431,11 +431,23 @@ if(!configurado){
     soltar.forEach(function(f){ f(); }); soltar = [];
     if(!usuario){ datos = {}; mostrar(false); return; }
     $("err").textContent = ""; mostrar(true);
-    soltar.push(onValue(ref(db,"registros"), function(s){ datos = s.val() || {}; migrar(); pintar(); },
-      function(){ $("aviso").textContent = "Esta cuenta no tiene permiso para ver los registros. Revise las reglas de la base de datos."; }));
-    soltar.push(onValue(ref(db,".info/connected"), function(s){
-      $("aviso").textContent = s.val() ? "Sincronizado. Los registros se comparten entre todos los dispositivos." : "Sin conexión. Los cambios se enviarán al reconectar.";
-    }));
+    var conectado = false, lectura = "espera", reintento = null;
+    function nota(){
+      var n = 0; Object.keys(datos).forEach(function(k){ n += Object.keys(datos[k]||{}).length; });
+      $("aviso").textContent =
+        lectura==="denegado" ? "Sin permiso para leer la base de datos con la cuenta "+usuario.email+". Revise las reglas publicadas en Firebase." :
+        !conectado ? "Sin conexión. Los cambios se enviarán al reconectar." :
+        lectura==="espera" ? "Conectando…" :
+        "Sincronizado: "+n+" marcas en la base compartida. Cuenta "+usuario.email+". Versión 3.";
+    }
+    function escuchar(){
+      var quitar = onValue(ref(db,"registros"), function(s){ lectura = "ok"; datos = s.val() || {}; migrar(); pintar(); nota(); },
+        function(){ lectura = "denegado"; datos = {}; pintar(); nota(); reintento = setTimeout(escuchar, 8000); });
+      soltar.push(quitar);
+    }
+    escuchar();
+    soltar.push(function(){ clearTimeout(reintento); });
+    soltar.push(onValue(ref(db,".info/connected"), function(s){ conectado = !!s.val(); nota(); }));
   });
 }
 document.addEventListener("visibilitychange", function(){ if(!document.hidden && !$("app").hidden) pintar(); });
